@@ -1,0 +1,32 @@
+HOMEPAGE = "http://github.com/openbmc/google-ipmi-sys"
+SUMMARY = "Google Sys OEM commands"
+DESCRIPTION = "Google sys OEM commands"
+
+inherit autotools pkgconfig
+inherit obmc-phosphor-license
+inherit obmc-phosphor-systemd
+inherit obmc-phosphor-ipmiprovider-symlink
+
+DEPENDS += "autoconf-archive-native"
+DEPENDS += "sdbusplus"
+DEPENDS += "phosphor-logging"
+
+# We depend on this to be built first so we can build our providers.
+DEPENDS += "phosphor-ipmi-host"
+
+RDEPENDS_${PN} += "sdbusplus phosphor-dbus-interfaces"
+
+S = "${WORKDIR}/git"
+SRC_URI = "git://github.com/openbmc/google-ipmi-sys"
+SRCREV = "90246e26904763be055ea07f5e5e6363ce0c20ac"
+
+FILES_${PN}_append = " ${libdir}/ipmid-providers/lib*${SOLIBS}"
+FILES_${PN}_append = " ${libdir}/host-ipmid/lib*${SOLIBS}"
+FILES_${PN}_append = " ${libdir}/net-ipmid/lib*${SOLIBS}"
+FILES_${PN}-dev_append = " ${libdir}/ipmid-providers/lib*${SOLIBSDEV} ${libdir}/ipmid-providers/*.la"
+
+HOSTIPMI_PROVIDER_LIBRARY += "libsyscmds.so"
+
+SYSTEMD_SERVICE_${PN}_append = " \
+ gbmc-psu-hardreset.target \
+"
