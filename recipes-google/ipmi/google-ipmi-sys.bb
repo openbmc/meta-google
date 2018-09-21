@@ -18,7 +18,7 @@ RDEPENDS_${PN} += "sdbusplus phosphor-dbus-interfaces"
 
 S = "${WORKDIR}/git"
 SRC_URI = "git://github.com/openbmc/google-ipmi-sys"
-SRCREV = "f9a19b80bea5987292e61b8b2aedcc3baedcaf8f"
+SRCREV = "ef45005c2c441a89a9bd84b9b0f22ac8a2fd9b65"
 
 FILES_${PN}_append = " ${libdir}/ipmid-providers/lib*${SOLIBS}"
 FILES_${PN}_append = " ${libdir}/host-ipmid/lib*${SOLIBS}"
