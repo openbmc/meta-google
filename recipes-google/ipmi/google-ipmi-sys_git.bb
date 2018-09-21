@@ -1,20 +1,18 @@
 HOMEPAGE = "http://github.com/openbmc/google-ipmi-sys"
 SUMMARY = "Google Sys OEM commands"
-DESCRIPTION = "Google sys OEM commands"
+DESCRIPTION = "Google Sys OEM commands"
 
 inherit autotools pkgconfig
-inherit obmc-phosphor-license
 inherit systemd
 inherit obmc-phosphor-ipmiprovider-symlink
+
+LICENSE = "Apache-2.0"
+LIC_FILES_CHKSUM = "file://LICENSE;md5=86d3f3a95c324c9479bd8986968f4327"
 
 DEPENDS += "autoconf-archive-native"
 DEPENDS += "sdbusplus"
 DEPENDS += "phosphor-logging"
-
-# We depend on this to be built first so we can build our providers.
 DEPENDS += "phosphor-ipmi-host"
-
-RDEPENDS_${PN} += "sdbusplus phosphor-dbus-interfaces"
 
 S = "${WORKDIR}/git"
 SRC_URI = "git://github.com/openbmc/google-ipmi-sys"
