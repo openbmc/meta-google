@@ -1,0 +1,10 @@
+Ok-To-Test+1: Jenkins <openbmc-ci-admin@ozlabs.org>
+Verified+1: Jenkins <openbmc-ci-admin@ozlabs.org>
+Code-Review+1: Brad Bishop <bradleyb@fuzziesquirrel.com>
+Code-Review+1: William A. Kennington III <wak@google.com>
+Code-Review+2: Patrick Venture <venture@google.com>
+Submitted-by: Patrick Venture <venture@google.com>
+Submitted-at: Thu, 27 Sep 2018 20:52:46 +0000
+Reviewed-on: https://gerrit.openbmc-project.xyz/13237
+Project: openbmc/meta-google
+Branch: refs/heads/master
