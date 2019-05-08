@@ -22,3 +22,5 @@ FILES_${PN}_append = " ${libdir}/net-ipmid/lib*${SOLIBS}"
 FILES_${PN}-dev_append = " ${libdir}/ipmid-providers/lib*${SOLIBSDEV} ${libdir}/ipmid-providers/*.la"
 
 HOSTIPMI_PROVIDER_LIBRARY += "libi2ccmds.so"
+
+do_configure[depends] += "virtual/kernel:do_shared_workdir"
