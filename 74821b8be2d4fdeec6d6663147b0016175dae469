@@ -1,0 +1,9 @@
+Ok-To-Test+1: Jenkins <openbmc-ci-admin@ozlabs.org>
+Code-Review+1: Benjamin Fair <benjaminfair@google.com>
+Verified+1: Jenkins <openbmc-ci-admin@ozlabs.org>
+Code-Review+2: Nancy Yuen <yuenn@google.com>
+Submitted-by: Andrew Geissler <geissonator@yahoo.com>
+Submitted-at: Fri, 01 May 2020 13:05:11 +0000
+Reviewed-on: https://gerrit.openbmc-project.xyz/c/openbmc/meta-google/+/31837
+Project: openbmc/meta-google
+Branch: refs/heads/master
