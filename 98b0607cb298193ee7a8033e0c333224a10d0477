@@ -1,0 +1,8 @@
+Ok-To-Test+1: OpenBMC CI <openbmcbump-ci@yahoo.com>
+Code-Review+2: Benjamin Fair <benjaminfair@google.com>
+Verified+1: OpenBMC CI <openbmcbump-ci@yahoo.com>
+Submitted-by: Patrick Williams <patrick@stwcx.xyz>
+Submitted-at: Wed, 04 Nov 2020 13:16:43 +0000
+Reviewed-on: https://gerrit.openbmc-project.xyz/c/openbmc/meta-google/+/37915
+Project: openbmc/meta-google
+Branch: refs/heads/master
