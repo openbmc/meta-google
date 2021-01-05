@@ -1,0 +1,44 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "f4e1f898_64b26cd4",
+        "filename": "recipes-google/default-ca/default-ca.bb",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1000233
+      },
+      "writtenOn": "2021-01-05T21:22:32Z",
+      "side": 1,
+      "message": "Since this will only be used for development, I recommend renaming it to something like \"default-ca-dev\". You can have it provide the virtual package \"default-ca\" if that helps with dependency mnaagement",
+      "revId": "d101f710e61fc4704b39e59233df9b77c72fab0a",
+      "serverId": "adbd0a64-1f21-4d83-b585-671fe73cb6e4",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "34bdbed4_4dd110e9",
+        "filename": "recipes-google/default-ca/default-ca.bb",
+        "patchSetId": 1
+      },
+      "lineNbr": 6,
+      "author": {
+        "id": 1000233
+      },
+      "writtenOn": "2021-01-05T21:22:32Z",
+      "side": 1,
+      "message": "Not needed since this is a .bb instead of a .bbappend",
+      "range": {
+        "startLine": 6,
+        "startChar": 0,
+        "endLine": 6,
+        "endChar": 46
+      },
+      "revId": "d101f710e61fc4704b39e59233df9b77c72fab0a",
+      "serverId": "adbd0a64-1f21-4d83-b585-671fe73cb6e4",
+      "unresolved": true
+    }
+  ]
+}
