@@ -19,6 +19,24 @@
     },
     {
       "key": {
+        "uuid": "572f2462_11354cab",
+        "filename": "recipes-google/default-ca/default-ca.bb",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1000903
+      },
+      "writtenOn": "2021-01-06T06:56:51Z",
+      "side": 1,
+      "message": "It should be that only the certificate is used for the development stage, right? It does not mean that this feature is only used for the development stage.\nPlease confirm that this feature is only used in the development phase, then I will modify it to \"default-ca-dev\".",
+      "parentUuid": "f4e1f898_64b26cd4",
+      "revId": "d101f710e61fc4704b39e59233df9b77c72fab0a",
+      "serverId": "adbd0a64-1f21-4d83-b585-671fe73cb6e4",
+      "unresolved": true
+    },
+    {
+      "key": {
         "uuid": "34bdbed4_4dd110e9",
         "filename": "recipes-google/default-ca/default-ca.bb",
         "patchSetId": 1
@@ -39,6 +57,30 @@
       "revId": "d101f710e61fc4704b39e59233df9b77c72fab0a",
       "serverId": "adbd0a64-1f21-4d83-b585-671fe73cb6e4",
       "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "87d008d0_c99c523c",
+        "filename": "recipes-google/default-ca/default-ca.bb",
+        "patchSetId": 1
+      },
+      "lineNbr": 6,
+      "author": {
+        "id": 1000903
+      },
+      "writtenOn": "2021-01-06T06:56:51Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "34bdbed4_4dd110e9",
+      "range": {
+        "startLine": 6,
+        "startChar": 0,
+        "endLine": 6,
+        "endChar": 46
+      },
+      "revId": "d101f710e61fc4704b39e59233df9b77c72fab0a",
+      "serverId": "adbd0a64-1f21-4d83-b585-671fe73cb6e4",
+      "unresolved": false
     }
   ]
 }
