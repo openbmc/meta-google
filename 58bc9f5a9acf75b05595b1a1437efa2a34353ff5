@@ -19,6 +19,24 @@
     },
     {
       "key": {
+        "uuid": "88bb633e_f5166679",
+        "filename": "recipes-phosphor/network/phosphor-network_%.bbappend",
+        "patchSetId": 2
+      },
+      "lineNbr": 1,
+      "author": {
+        "id": 1000885
+      },
+      "writtenOn": "2021-02-09T08:35:53Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "c7411832_8f2286c0",
+      "revId": "58bc9f5a9acf75b05595b1a1437efa2a34353ff5",
+      "serverId": "adbd0a64-1f21-4d83-b585-671fe73cb6e4",
+      "unresolved": false
+    },
+    {
+      "key": {
         "uuid": "969741eb_65750c16",
         "filename": "recipes-phosphor/network/phosphor-network_%.bbappend",
         "patchSetId": 2
@@ -99,6 +117,24 @@
     },
     {
       "key": {
+        "uuid": "d97b0dd9_e3f2b158",
+        "filename": "recipes-phosphor/network/phosphor-network_%.bbappend",
+        "patchSetId": 2
+      },
+      "lineNbr": 8,
+      "author": {
+        "id": 1000885
+      },
+      "writtenOn": "2021-02-09T08:35:53Z",
+      "side": 1,
+      "message": "That might be a better idea than having patches here.\n\nI can rebase it if William don\u0027t mind the changes.\n\n----\n\nHow would we handle patches that is strictly google specific?\n\nI am not sure if there are any right now, but I am guessing we will still have an internal repo for keeping the patches?",
+      "parentUuid": "52e19477_a8938f1f",
+      "revId": "58bc9f5a9acf75b05595b1a1437efa2a34353ff5",
+      "serverId": "adbd0a64-1f21-4d83-b585-671fe73cb6e4",
+      "unresolved": true
+    },
+    {
+      "key": {
         "uuid": "cc829a39_f985ded0",
         "filename": "recipes-phosphor/network/phosphor-network_%.bbappend",
         "patchSetId": 2
@@ -113,6 +149,24 @@
       "revId": "58bc9f5a9acf75b05595b1a1437efa2a34353ff5",
       "serverId": "adbd0a64-1f21-4d83-b585-671fe73cb6e4",
       "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "65ac494f_81e404b8",
+        "filename": "recipes-phosphor/network/phosphor-network_%.bbappend",
+        "patchSetId": 2
+      },
+      "lineNbr": 11,
+      "author": {
+        "id": 1000885
+      },
+      "writtenOn": "2021-02-09T08:35:53Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "cc829a39_f985ded0",
+      "revId": "58bc9f5a9acf75b05595b1a1437efa2a34353ff5",
+      "serverId": "adbd0a64-1f21-4d83-b585-671fe73cb6e4",
+      "unresolved": false
     }
   ]
 }
