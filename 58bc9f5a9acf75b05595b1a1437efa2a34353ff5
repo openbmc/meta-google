@@ -153,6 +153,24 @@
     },
     {
       "key": {
+        "uuid": "9de73c7b_daafb105",
+        "filename": "recipes-phosphor/network/phosphor-network_%.bbappend",
+        "patchSetId": 2
+      },
+      "lineNbr": 8,
+      "author": {
+        "id": 1000885
+      },
+      "writtenOn": "2021-02-09T18:44:10Z",
+      "side": 1,
+      "message": "sounds good, thanks for the reference.\n\nWilliam will continue with the reviews and hopefully we can get rid of the patches here.",
+      "parentUuid": "b572daed_201d8aa8",
+      "revId": "58bc9f5a9acf75b05595b1a1437efa2a34353ff5",
+      "serverId": "adbd0a64-1f21-4d83-b585-671fe73cb6e4",
+      "unresolved": true
+    },
+    {
+      "key": {
         "uuid": "cc829a39_f985ded0",
         "filename": "recipes-phosphor/network/phosphor-network_%.bbappend",
         "patchSetId": 2
