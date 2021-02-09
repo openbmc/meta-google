@@ -135,6 +135,24 @@
     },
     {
       "key": {
+        "uuid": "b572daed_201d8aa8",
+        "filename": "recipes-phosphor/network/phosphor-network_%.bbappend",
+        "patchSetId": 2
+      },
+      "lineNbr": 8,
+      "author": {
+        "id": 1000153
+      },
+      "writtenOn": "2021-02-09T17:32:25Z",
+      "side": 1,
+      "message": "\u003e That might be a better idea than having patches here.\n\u003e \n\u003e I can rebase it if William don\u0027t mind the changes.\n\u003e \n\u003e ----\n\u003e \n\u003e How would we handle patches that is strictly google specific?\n\nI\u0027ve recently been trying to document exactly that, so I\u0027ll answer in the form of a doc update.  check out #2 https://gerrit.openbmc-project.xyz/c/openbmc/docs/+/40294/1/meta-layer-guidelines.md\n\n\u003e \n\u003e I am not sure if there are any right now, but I am guessing we will still have an internal repo for keeping the patches?\n\nWhether or not we have an internal repo is a discussion that OpenBMC upstream doesn\u0027t need to worry about, in the context of this patch, lets just continue to make upstream as good as we can.",
+      "parentUuid": "d97b0dd9_e3f2b158",
+      "revId": "58bc9f5a9acf75b05595b1a1437efa2a34353ff5",
+      "serverId": "adbd0a64-1f21-4d83-b585-671fe73cb6e4",
+      "unresolved": true
+    },
+    {
+      "key": {
         "uuid": "cc829a39_f985ded0",
         "filename": "recipes-phosphor/network/phosphor-network_%.bbappend",
         "patchSetId": 2
