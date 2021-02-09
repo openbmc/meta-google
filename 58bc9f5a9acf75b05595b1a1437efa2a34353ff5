@@ -19,6 +19,86 @@
     },
     {
       "key": {
+        "uuid": "969741eb_65750c16",
+        "filename": "recipes-phosphor/network/phosphor-network_%.bbappend",
+        "patchSetId": 2
+      },
+      "lineNbr": 5,
+      "author": {
+        "id": 1000153
+      },
+      "writtenOn": "2021-02-09T07:38:33Z",
+      "side": 1,
+      "message": "Waiting on feedback from William since July.  I\u0027m assuming needs refreshed?",
+      "range": {
+        "startLine": 5,
+        "startChar": 0,
+        "endLine": 5,
+        "endChar": 50
+      },
+      "revId": "58bc9f5a9acf75b05595b1a1437efa2a34353ff5",
+      "serverId": "adbd0a64-1f21-4d83-b585-671fe73cb6e4",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "15e4f712_3861f668",
+        "filename": "recipes-phosphor/network/phosphor-network_%.bbappend",
+        "patchSetId": 2
+      },
+      "lineNbr": 6,
+      "author": {
+        "id": 1000153
+      },
+      "writtenOn": "2021-02-09T07:38:33Z",
+      "side": 1,
+      "message": "+1ed by maintainer, then had a merge conflict.  Needs rebased, then should be able to merge?",
+      "range": {
+        "startLine": 6,
+        "startChar": 0,
+        "endLine": 6,
+        "endChar": 72
+      },
+      "revId": "58bc9f5a9acf75b05595b1a1437efa2a34353ff5",
+      "serverId": "adbd0a64-1f21-4d83-b585-671fe73cb6e4",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "9ed3341f_d570168d",
+        "filename": "recipes-phosphor/network/phosphor-network_%.bbappend",
+        "patchSetId": 2
+      },
+      "lineNbr": 7,
+      "author": {
+        "id": 1000153
+      },
+      "writtenOn": "2021-02-09T07:38:33Z",
+      "side": 1,
+      "message": "Also has a merge conflict, and hasn\u0027t been updated since july.",
+      "revId": "58bc9f5a9acf75b05595b1a1437efa2a34353ff5",
+      "serverId": "adbd0a64-1f21-4d83-b585-671fe73cb6e4",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "52e19477_a8938f1f",
+        "filename": "recipes-phosphor/network/phosphor-network_%.bbappend",
+        "patchSetId": 2
+      },
+      "lineNbr": 8,
+      "author": {
+        "id": 1000153
+      },
+      "writtenOn": "2021-02-09T07:38:33Z",
+      "side": 1,
+      "message": "Does it make more sense to just get the patches rebased and merged into mainline?\n\nAs a general rule, checking patches into meta-* layers against openbmc (or really any project for that matter) is not allowed.",
+      "revId": "58bc9f5a9acf75b05595b1a1437efa2a34353ff5",
+      "serverId": "adbd0a64-1f21-4d83-b585-671fe73cb6e4",
+      "unresolved": true
+    },
+    {
+      "key": {
         "uuid": "cc829a39_f985ded0",
         "filename": "recipes-phosphor/network/phosphor-network_%.bbappend",
         "patchSetId": 2
