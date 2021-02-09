@@ -1,0 +1,165 @@
+From d3c16a0dbd772c4b68babd7c617ef425d4f5e848 Mon Sep 17 00:00:00 2001
+From: "William A. Kennington III" <wak@google.com>
+Date: Mon, 22 Apr 2019 03:55:23 -0700
+Subject: [PATCH 3/8] util: Fix isValidPrefix to allow up to 128 for IPv6
+
+The previous code had an issue where it would only allow address
+prefixes of /64 or less. This prevented us from assigning our IP
+addresses to the BMC, which always have prefix length of 128.
+
+Change-Id: I6dc95bdd845480e14da65afd0eef2d5d5b9fa6d6
+Signed-off-by: William A. Kennington III <wak@google.com>
+---
+ test/test_util.cpp | 33 ++++++++++++++++-----------------
+ util.cpp           | 27 ++++++++++++---------------
+ util.hpp           | 22 ++++++++++++++++++++--
+ 3 files changed, 48 insertions(+), 34 deletions(-)
+
+diff --git a/test/test_util.cpp b/test/test_util.cpp
+index 030635b..e644675 100644
+--- a/test/test_util.cpp
++++ b/test/test_util.cpp
+@@ -6,6 +6,7 @@
+ #include <cstddef>
+ #include <cstring>
+ #include <stdplus/raw.hpp>
++#include <stdexcept>
+ #include <string>
+ #include <string_view>
+ #include <xyz/openbmc_project/Common/error.hpp>
+@@ -105,23 +106,21 @@ TEST_F(TestUtil, IpValidation)
+ 
+ TEST_F(TestUtil, PrefixValidation)
+ {
+-    uint8_t prefixLength = 1;
+-    EXPECT_EQ(true, isValidPrefix(AF_INET, prefixLength));
+-
+-    prefixLength = 32;
+-    EXPECT_EQ(true, isValidPrefix(AF_INET, prefixLength));
+-
+-    prefixLength = 0;
+-    EXPECT_EQ(false, isValidPrefix(AF_INET, prefixLength));
+-
+-    prefixLength = 33;
+-    EXPECT_EQ(false, isValidPrefix(AF_INET, prefixLength));
+-
+-    prefixLength = 33;
+-    EXPECT_EQ(true, isValidPrefix(AF_INET6, prefixLength));
+-
+-    prefixLength = 65;
+-    EXPECT_EQ(false, isValidPrefix(AF_INET, prefixLength));
++    EXPECT_EQ(true, isValidPrefix(AF_INET, 0));
++    EXPECT_EQ(true, isValidPrefix(AF_INET, 1));
++    EXPECT_EQ(true, isValidPrefix(AF_INET, 32));
++    EXPECT_EQ(false, isValidPrefix(AF_INET, 33));
++    EXPECT_EQ(false, isValidPrefix(AF_INET, 64));
++
++    EXPECT_EQ(true, isValidPrefix(AF_INET6, 0));
++    EXPECT_EQ(true, isValidPrefix(AF_INET6, 1));
++    EXPECT_EQ(true, isValidPrefix(AF_INET6, 53));
++    EXPECT_EQ(true, isValidPrefix(AF_INET6, 64));
++    EXPECT_EQ(true, isValidPrefix(AF_INET6, 128));
++    EXPECT_EQ(false, isValidPrefix(AF_INET6, 129));
++    EXPECT_EQ(false, isValidPrefix(AF_INET6, 177));
++
++    EXPECT_THROW(isValidPrefix(AF_UNSPEC, 1), std::invalid_argument);
+ }
+ 
+ TEST_F(TestUtil, InterfaceToUbootEthAddr)
+diff --git a/util.cpp b/util.cpp
+index 2205267..180ca36 100644
+--- a/util.cpp
++++ b/util.cpp
+@@ -94,27 +94,24 @@ bool isValidIP(int addressFamily, const std::string& address)
+     return inet_pton(addressFamily, address.c_str(), buf) > 0;
+ }
+ 
+-bool isValidPrefix(int addressFamily, uint8_t prefixLength)
++template <int family>
++bool isValidPrefix(uint8_t prefix)
+ {
+-    if (addressFamily == AF_INET)
++    return prefix <= sizeof(typename FamilyTraits<family>::addr) * 8;
++}
++
++bool isValidPrefix(int family, uint8_t prefix)
++{
++    if (family == AF_INET)
+     {
+-        if (prefixLength < IPV4_MIN_PREFIX_LENGTH ||
+-            prefixLength > IPV4_MAX_PREFIX_LENGTH)
+-        {
+-            return false;
+-        }
++        return isValidPrefix<AF_INET>(prefix);
+     }
+-
+-    if (addressFamily == AF_INET6)
++    else if (family == AF_INET6)
+     {
+-        if (prefixLength < IPV4_MIN_PREFIX_LENGTH ||
+-            prefixLength > IPV6_MAX_PREFIX_LENGTH)
+-        {
+-            return false;
+-        }
++        return isValidPrefix<AF_INET6>(prefix);
+     }
+ 
+-    return true;
++    throw std::invalid_argument("Invalid addr family");
+ }
+ 
+ InterfaceList getInterfaces()
+diff --git a/util.hpp b/util.hpp
+index c680ef7..40e198e 100644
+--- a/util.hpp
++++ b/util.hpp
+@@ -6,6 +6,7 @@
+ #include "types.hpp"
+ 
+ #include <netinet/ether.h>
++#include <netinet/in.h>
+ #include <unistd.h>
+ 
+ #include <cstring>
+@@ -77,6 +78,23 @@ bool isUnicast(const ether_addr& mac);
+ constexpr auto networkdService = "systemd-networkd.service";
+ constexpr auto timeSynchdService = "systemd-timesyncd.service";
+ 
++template <int family>
++struct FamilyTraits
++{
++};
++
++template <>
++struct FamilyTraits<AF_INET>
++{
++    using addr = in_addr;
++};
++
++template <>
++struct FamilyTraits<AF_INET6>
++{
++    using addr = in6_addr;
++};
++
+ /* @brief converts a sockaddr for the specified address family into
+  *        a type_safe InAddrAny.
+  * @param[in] addressFamily - The address family of the buf
+@@ -98,11 +116,11 @@ std::string toString(const InAddrAny& addr);
+ bool isValidIP(int addressFamily, const std::string& address);
+ 
+ /* @brief checks that the given prefix is valid or not.
+- * @param[in] addressFamily - IP address family(AF_INET/AF_INET6).
++ * @param[in] family - IP address family(AF_INET/AF_INET6).
+  * @param[in] prefix - prefix length.
+  * @returns true if it is valid otherwise false.
+  */
+-bool isValidPrefix(int addressFamily, uint8_t prefixLength);
++bool isValidPrefix(int family, uint8_t prefixLength);
+ 
+ /** @brief Get all the interfaces from the system.
+  *  @returns list of interface names.
+-- 
+2.28.0.rc0.142.g3c755180ce-goog
+

@@ -1,0 +1,924 @@
+From f330ce8d589ba586a07a785d602c19b672b92d20 Mon Sep 17 00:00:00 2001
+From: "William A. Kennington III" <wak@google.com>
+Date: Mon, 22 Apr 2019 01:26:06 -0700
+Subject: [PATCH 2/8] ipaddress: Parse from netlink
+
+This improves on the old code for enumerating IP addresses by allowing
+the application of filtering rules prior to listing out the IPs. The
+netlink interface provides the information in a more direct form with
+less superfluous enumeration of data about the address.
+
+Fixes an issue in the previous code around parsing of prefix
+lengths from netmasks, which got deleted when moving to netlink. Used to
+infinite loop if given a netmask for a 128 prefix length.
+
+Change-Id: I8ff2408b58921a82fd556d8ed08c203171c88035
+Signed-off-by: William A. Kennington III <wak@google.com>
+---
+ ethernet_interface.cpp  |  44 ++++-----
+ ipaddress.cpp           |  67 ++++++++++++++
+ ipaddress.hpp           |  45 +++++++++
+ test/Makefile.am        |   1 +
+ test/test_ipaddress.cpp | 199 ++++++++++++++++++++++++++++++++++++++++
+ test/test_util.cpp      |  77 ----------------
+ types.hpp               |  17 ----
+ util.cpp                | 198 ---------------------------------------
+ util.hpp                |  28 ------
+ 9 files changed, 334 insertions(+), 342 deletions(-)
+ create mode 100644 test/test_ipaddress.cpp
+
+diff --git a/ethernet_interface.cpp b/ethernet_interface.cpp
+index 721cdf9..89d5590 100644
+--- a/ethernet_interface.cpp
++++ b/ethernet_interface.cpp
+@@ -26,6 +26,7 @@
+ #include <stdplus/raw.hpp>
+ #include <string>
+ #include <string_view>
++#include <variant>
+ #include <xyz/openbmc_project/Common/error.hpp>
+ 
+ namespace phosphor
+@@ -109,17 +110,18 @@ EthernetInterface::EthernetInterface(sdbusplus::bus::bus& bus,
+     }
+ }
+ 
+-static IP::Protocol convertFamily(int family)
++static IP::Protocol getProtocol(const InAddrAny& addr)
+ {
+-    switch (family)
++    if (std::holds_alternative<in_addr>(addr))
+     {
+-        case AF_INET:
+-            return IP::Protocol::IPv4;
+-        case AF_INET6:
+-            return IP::Protocol::IPv6;
++        return IP::Protocol::IPv4;
++    }
++    else if (std::holds_alternative<in6_addr>(addr))
++    {
++        return IP::Protocol::IPv6;
+     }
+ 
+-    throw std::invalid_argument("Bad address family");
++    throw std::runtime_error("Invalid addr type");
+ }
+ 
+ void EthernetInterface::disableDHCP(IP::Protocol protocol)
+@@ -185,31 +187,29 @@ void EthernetInterface::createIPAddressObjects()
+ {
+     addrs.clear();
+ 
+-    auto addrs = getInterfaceAddrs()[interfaceName()];
+-
+-    for (auto& addr : addrs)
++    AddressFilter filter;
++    filter.interface = ifIndex();
++    filter.scope = RT_SCOPE_UNIVERSE;
++    auto currentAddrs = getCurrentAddresses(filter);
++    for (const auto& addr : currentAddrs)
+     {
+-        IP::Protocol addressType = convertFamily(addr.addrType);
++        auto address = toString(addr.address);
++        IP::Protocol addressType = getProtocol(addr.address);
+         IP::AddressOrigin origin = IP::AddressOrigin::Static;
+         if (dhcpIsEnabled(addressType))
+         {
+             origin = IP::AddressOrigin::DHCP;
+         }
+-        if (isLinkLocalIP(addr.ipaddress))
+-        {
+-            origin = IP::AddressOrigin::LinkLocal;
+-        }
+         // Obsolete parameter
+         std::string gateway = "";
+ 
+-        std::string ipAddressObjectPath = generateObjectPath(
+-            addressType, addr.ipaddress, addr.prefix, gateway);
++        std::string ipAddressObjectPath =
++            generateObjectPath(addressType, address, addr.prefix, gateway);
+ 
+-        this->addrs.emplace(addr.ipaddress,
+-                            std::make_shared<phosphor::network::IPAddress>(
+-                                bus, ipAddressObjectPath.c_str(), *this,
+-                                addressType, addr.ipaddress, origin,
+-                                addr.prefix, gateway));
++        addrs.emplace(address,
++                      std::make_shared<phosphor::network::IPAddress>(
++                          bus, ipAddressObjectPath.c_str(), *this, addressType,
++                          address, origin, addr.prefix, gateway));
+     }
+ }
+ 
+diff --git a/ipaddress.cpp b/ipaddress.cpp
+index f30cf34..1d0fb52 100644
+--- a/ipaddress.cpp
++++ b/ipaddress.cpp
+@@ -3,16 +3,37 @@
+ #include "ipaddress.hpp"
+ 
+ #include "ethernet_interface.hpp"
++#include "netlink.hpp"
+ #include "util.hpp"
+ 
++#include <linux/netlink.h>
++#include <linux/rtnetlink.h>
++
+ #include <phosphor-logging/elog-errors.hpp>
+ #include <phosphor-logging/log.hpp>
++#include <stdexcept>
++#include <string>
++#include <string_view>
++#include <vector>
++#include <stdplus/raw.hpp>
+ #include <xyz/openbmc_project/Common/error.hpp>
+ namespace phosphor
+ {
+ namespace network
+ {
+ 
++std::vector<AddressInfo> getCurrentAddresses(const AddressFilter& filter)
++{
++    std::vector<AddressInfo> addresses;
++    auto cb = [&filter, &addresses](const nlmsghdr& hdr, std::string_view msg) {
++        detail::parseAddress(filter, hdr, msg, addresses);
++    };
++    ifaddrmsg msg{};
++    msg.ifa_index = filter.interface;
++    netlink::performRequest(NETLINK_ROUTE, RTM_GETADDR, NLM_F_DUMP, msg, cb);
++    return addresses;
++}
++
+ using namespace phosphor::logging;
+ using namespace sdbusplus::xyz::openbmc_project::Common::Error;
+ using NotAllowed = sdbusplus::xyz::openbmc_project::Common::Error::NotAllowed;
+@@ -69,5 +90,51 @@ void IPAddress::delete_()
+     parent.deleteObject(address());
+ }
+ 
++namespace detail
++{
++
++void parseAddress(const AddressFilter& filter, const nlmsghdr& hdr,
++                  std::string_view msg, std::vector<AddressInfo>& addresses)
++{
++    if (hdr.nlmsg_type != RTM_NEWADDR)
++    {
++        throw std::runtime_error("Not an address msg");
++    }
++    auto ifaddr = stdplus::raw::extract<ifaddrmsg>(msg);
++
++    // Filter out addresses we don't care about
++    unsigned ifindex = ifaddr.ifa_index;
++    if (filter.interface != 0 && filter.interface != ifindex)
++    {
++        return;
++    }
++    if (filter.scope && *filter.scope != ifaddr.ifa_scope)
++    {
++        return;
++    }
++
++    // Build the info about the address we found
++    AddressInfo address;
++    address.interface = ifindex;
++    address.prefix = ifaddr.ifa_prefixlen;
++    address.scope = ifaddr.ifa_scope;
++    bool set_addr = false;
++    while (!msg.empty())
++    {
++        auto [hdr, data] = netlink::extractRtAttr(msg);
++        if (hdr.rta_type == IFA_ADDRESS)
++        {
++            address.address = addrFromBuf(ifaddr.ifa_family, data);
++            set_addr = true;
++        }
++    }
++    if (!set_addr)
++    {
++        throw std::runtime_error("Missing address");
++    }
++    addresses.push_back(std::move(address));
++}
++
++} // namespace detail
+ } // namespace network
+ } // namespace phosphor
+diff --git a/ipaddress.hpp b/ipaddress.hpp
+index 3ed551a..a3cda66 100644
+--- a/ipaddress.hpp
++++ b/ipaddress.hpp
+@@ -1,8 +1,15 @@
+ #pragma once
+ 
++#include <linux/netlink.h>
++#include <netinet/in.h>
++
++#include <cstdint>
+ #include <sdbusplus/bus.hpp>
+ #include <sdbusplus/server/object.hpp>
+ #include <string>
++#include <string_view>
++#include <vector>
++#include <variant>
+ #include <xyz/openbmc_project/Network/IP/server.hpp>
+ #include <xyz/openbmc_project/Object/Delete/server.hpp>
+ 
+@@ -17,8 +24,39 @@ using IPIfaces = sdbusplus::server::object::object<
+ 
+ using IP = sdbusplus::xyz::openbmc_project::Network::server::IP;
+ 
++// Byte representations for common address types in network byte order
++using InAddrAny = std::variant<struct in_addr, struct in6_addr>;
++
+ class EthernetInterface;
+ 
++/* @class AddressFilter
++ */
++struct AddressFilter
++{
++    unsigned interface;
++    std::optional<uint8_t> scope;
++
++    /* @brief Creates an empty filter */
++    AddressFilter() : interface(0)
++    {
++    }
++};
++
++/** @class AddressInfo
++ *  @brief Information about a addresses from the kernel
++ */
++struct AddressInfo
++{
++    unsigned interface;
++    InAddrAny address;
++    uint8_t prefix;
++    uint8_t scope;
++};
++
++/** @brief Returns a list of the current system neighbor table
++ */
++std::vector<AddressInfo> getCurrentAddresses(const AddressFilter& filter);
++
+ /** @class IPAddress
+  *  @brief OpenBMC IPAddress implementation.
+  *  @details A concrete implementation for the
+@@ -71,5 +109,12 @@ class IPAddress : public IPIfaces
+     EthernetInterface& parent;
+ };
+ 
++namespace detail
++{
++
++void parseAddress(const AddressFilter& filter, const nlmsghdr& hdr,
++                  std::string_view msg, std::vector<AddressInfo>& addresses);
++
++} // namespace detail
+ } // namespace network
+ } // namespace phosphor
+diff --git a/test/Makefile.am b/test/Makefile.am
+index 3d63748..c9064cd 100644
+--- a/test/Makefile.am
++++ b/test/Makefile.am
+@@ -7,6 +7,7 @@ check_PROGRAMS = test
+ test_SOURCES = \
+ 	test_util.cpp \
+ 	mock_syscall.cpp \
++	test_ipaddress.cpp \
+ 	test_neighbor.cpp \
+ 	test_netlink.cpp \
+ 	test_network_manager.cpp \
+diff --git a/test/test_ipaddress.cpp b/test/test_ipaddress.cpp
+new file mode 100644
+index 0000000..4357215
+--- /dev/null
++++ b/test/test_ipaddress.cpp
+@@ -0,0 +1,199 @@
++#include "ipaddress.hpp"
++#include "util.hpp"
++
++#include <arpa/inet.h>
++#include <linux/netlink.h>
++#include <linux/rtnetlink.h>
++
++#include <cstring>
++#include <stdexcept>
++#include <string>
++#include <vector>
++
++#include <gtest/gtest.h>
++
++namespace phosphor
++{
++namespace network
++{
++namespace detail
++{
++
++TEST(ParseAddress, NotAddressType)
++{
++    nlmsghdr hdr{};
++    hdr.nlmsg_type = RTM_NEWLINK;
++    AddressFilter filter;
++
++    std::vector<AddressInfo> addresses;
++    EXPECT_THROW(parseAddress(filter, hdr, "", addresses), std::runtime_error);
++    EXPECT_EQ(0, addresses.size());
++}
++
++TEST(ParseAddress, SmallMsg)
++{
++    nlmsghdr hdr{};
++    hdr.nlmsg_type = RTM_NEWADDR;
++    std::string data = "1";
++    AddressFilter filter;
++
++    std::vector<AddressInfo> addresses;
++    EXPECT_THROW(parseAddress(filter, hdr, data, addresses),
++                 std::runtime_error);
++    EXPECT_EQ(0, addresses.size());
++}
++
++TEST(ParseAddress, NoAttrs)
++{
++    nlmsghdr hdr{};
++    hdr.nlmsg_type = RTM_NEWADDR;
++    ifaddrmsg msg{};
++    msg.ifa_family = AF_INET;
++    msg.ifa_prefixlen = 24;
++    msg.ifa_index = 1;
++    msg.ifa_scope = RT_SCOPE_UNIVERSE;
++    std::string data;
++    data.append(reinterpret_cast<char*>(&msg), sizeof(msg));
++    AddressFilter filter;
++
++    std::vector<AddressInfo> addresses;
++    EXPECT_THROW(parseAddress(filter, hdr, data, addresses),
++                 std::runtime_error);
++    EXPECT_EQ(0, addresses.size());
++}
++
++TEST(ParseAddress, NoAddress)
++{
++    nlmsghdr hdr{};
++    hdr.nlmsg_type = RTM_NEWADDR;
++    ifaddrmsg msg{};
++    msg.ifa_family = AF_INET;
++    msg.ifa_prefixlen = 24;
++    msg.ifa_index = 1;
++    msg.ifa_scope = RT_SCOPE_UNIVERSE;
++    in_addr addr{};
++    rtattr local{};
++    local.rta_len = RTA_LENGTH(sizeof(addr));
++    local.rta_type = IFA_LOCAL;
++    char localbuf[RTA_ALIGN(local.rta_len)];
++    std::memset(localbuf, '\0', sizeof(localbuf));
++    std::memcpy(localbuf, &local, sizeof(local));
++    std::memcpy(RTA_DATA(localbuf), &addr, sizeof(addr));
++    std::string data;
++    data.append(reinterpret_cast<char*>(&msg), sizeof(msg));
++    data.append(reinterpret_cast<char*>(&localbuf), sizeof(localbuf));
++    AddressFilter filter;
++
++    std::vector<AddressInfo> addresses;
++    EXPECT_THROW(parseAddress(filter, hdr, data, addresses),
++                 std::runtime_error);
++    EXPECT_EQ(0, addresses.size());
++}
++
++TEST(ParseAddress, FilterInterface)
++{
++    nlmsghdr hdr{};
++    hdr.nlmsg_type = RTM_NEWADDR;
++    ifaddrmsg msg{};
++    msg.ifa_family = AF_INET;
++    msg.ifa_prefixlen = 24;
++    msg.ifa_index = 2;
++    msg.ifa_scope = RT_SCOPE_UNIVERSE;
++    in_addr addr;
++    ASSERT_EQ(1, inet_pton(msg.ifa_family, "192.168.10.1", &addr));
++    rtattr address{};
++    address.rta_len = RTA_LENGTH(sizeof(addr));
++    address.rta_type = IFA_ADDRESS;
++    char addressbuf[RTA_ALIGN(address.rta_len)];
++    std::memset(addressbuf, '\0', sizeof(addressbuf));
++    std::memcpy(addressbuf, &address, sizeof(address));
++    std::memcpy(RTA_DATA(addressbuf), &addr, sizeof(addr));
++    std::string data;
++    data.append(reinterpret_cast<char*>(&msg), sizeof(msg));
++    data.append(reinterpret_cast<char*>(&addressbuf), sizeof(addressbuf));
++    AddressFilter filter;
++
++    std::vector<AddressInfo> addresses;
++    filter.interface = 1;
++    parseAddress(filter, hdr, data, addresses);
++    EXPECT_EQ(0, addresses.size());
++    filter.interface = 2;
++    parseAddress(filter, hdr, data, addresses);
++    EXPECT_EQ(1, addresses.size());
++    EXPECT_EQ(msg.ifa_index, addresses[0].interface);
++    EXPECT_EQ(msg.ifa_scope, addresses[0].scope);
++    EXPECT_EQ(msg.ifa_prefixlen, addresses[0].prefix);
++    EXPECT_TRUE(equal(addr, std::get<in_addr>(addresses[0].address)));
++}
++
++TEST(ParseNeighbor, FilterScope)
++{
++    nlmsghdr hdr{};
++    hdr.nlmsg_type = RTM_NEWADDR;
++    ifaddrmsg msg{};
++    msg.ifa_family = AF_INET;
++    msg.ifa_prefixlen = 24;
++    msg.ifa_index = 2;
++    msg.ifa_scope = RT_SCOPE_SITE;
++    in_addr addr;
++    ASSERT_EQ(1, inet_pton(msg.ifa_family, "192.168.10.1", &addr));
++    rtattr address{};
++    address.rta_len = RTA_LENGTH(sizeof(addr));
++    address.rta_type = IFA_ADDRESS;
++    char addressbuf[RTA_ALIGN(address.rta_len)];
++    std::memset(addressbuf, '\0', sizeof(addressbuf));
++    std::memcpy(addressbuf, &address, sizeof(address));
++    std::memcpy(RTA_DATA(addressbuf), &addr, sizeof(addr));
++    std::string data;
++    data.append(reinterpret_cast<char*>(&msg), sizeof(msg));
++    data.append(reinterpret_cast<char*>(&addressbuf), sizeof(addressbuf));
++    AddressFilter filter;
++
++    std::vector<AddressInfo> addresses;
++    filter.scope = RT_SCOPE_UNIVERSE;
++    parseAddress(filter, hdr, data, addresses);
++    EXPECT_EQ(0, addresses.size());
++    filter.scope = RT_SCOPE_SITE;
++    parseAddress(filter, hdr, data, addresses);
++    EXPECT_EQ(1, addresses.size());
++    EXPECT_EQ(msg.ifa_index, addresses[0].interface);
++    EXPECT_EQ(msg.ifa_scope, addresses[0].scope);
++    EXPECT_EQ(msg.ifa_prefixlen, addresses[0].prefix);
++    EXPECT_TRUE(equal(addr, std::get<in_addr>(addresses[0].address)));
++}
++
++TEST(ParseNeighbor, NoFilter)
++{
++    nlmsghdr hdr{};
++    hdr.nlmsg_type = RTM_NEWADDR;
++    ifaddrmsg msg{};
++    msg.ifa_family = AF_INET6;
++    msg.ifa_prefixlen = 24;
++    msg.ifa_index = 1;
++    msg.ifa_scope = RT_SCOPE_UNIVERSE;
++    in6_addr addr;
++    ASSERT_EQ(1, inet_pton(msg.ifa_family, "fd00::2", &addr));
++    rtattr address{};
++    address.rta_len = RTA_LENGTH(sizeof(addr));
++    address.rta_type = IFA_ADDRESS;
++    char addressbuf[RTA_ALIGN(address.rta_len)];
++    std::memset(addressbuf, '\0', sizeof(addressbuf));
++    std::memcpy(addressbuf, &address, sizeof(address));
++    std::memcpy(RTA_DATA(addressbuf), &addr, sizeof(addr));
++    std::string data;
++    data.append(reinterpret_cast<char*>(&msg), sizeof(msg));
++    data.append(reinterpret_cast<char*>(&addressbuf), sizeof(addressbuf));
++    AddressFilter filter;
++
++    std::vector<AddressInfo> addresses;
++    parseAddress(filter, hdr, data, addresses);
++    EXPECT_EQ(1, addresses.size());
++    EXPECT_EQ(msg.ifa_index, addresses[0].interface);
++    EXPECT_EQ(msg.ifa_scope, addresses[0].scope);
++    EXPECT_EQ(msg.ifa_prefixlen, addresses[0].prefix);
++    EXPECT_TRUE(equal(addr, std::get<in6_addr>(addresses[0].address)));
++}
++
++} // namespace detail
++} // namespace network
++} // namespace phosphor
+diff --git a/test/test_util.cpp b/test/test_util.cpp
+index a6605dd..030635b 100644
+--- a/test/test_util.cpp
++++ b/test/test_util.cpp
+@@ -124,83 +124,6 @@ TEST_F(TestUtil, PrefixValidation)
+     EXPECT_EQ(false, isValidPrefix(AF_INET, prefixLength));
+ }
+ 
+-TEST_F(TestUtil, ConvertV4MasktoPrefix)
+-{
+-    std::string mask = "255.255.255.0";
+-    uint8_t prefix = toCidr(AF_INET, mask);
+-    EXPECT_EQ(prefix, 24);
+-
+-    mask = "255.255.0.0";
+-    prefix = toCidr(AF_INET, mask);
+-    EXPECT_EQ(prefix, 16);
+-
+-    mask = "255.0.0.0";
+-    prefix = toCidr(AF_INET, mask);
+-    EXPECT_EQ(prefix, 8);
+-
+-    mask = "255.224.0.0";
+-    prefix = toCidr(AF_INET, mask);
+-    EXPECT_EQ(prefix, 11);
+-
+-    // Invalid Mask
+-    mask = "255.0.255.0";
+-    prefix = toCidr(AF_INET, mask);
+-    EXPECT_EQ(prefix, 0);
+-}
+-
+-TEST_F(TestUtil, convertV6MasktoPrefix)
+-{
+-    std::string mask = "ffff:ffff::";
+-    uint8_t prefix = toCidr(AF_INET6, mask);
+-    EXPECT_EQ(prefix, 32);
+-
+-    mask = "ffff:ffff:ffff::";
+-    prefix = toCidr(AF_INET6, mask);
+-    EXPECT_EQ(prefix, 48);
+-
+-    mask = "ffff:ffff:fc00::";
+-    prefix = toCidr(AF_INET6, mask);
+-    EXPECT_EQ(prefix, 38);
+-
+-    // Invalid Mask
+-    mask = "ffff:0fff::";
+-    prefix = toCidr(AF_INET6, mask);
+-    EXPECT_EQ(prefix, 0);
+-}
+-
+-TEST_F(TestUtil, isLinkLocaladdress)
+-{
+-    std::string ipaddress = "fe80:fec0::";
+-    EXPECT_TRUE(isLinkLocalIP(ipaddress));
+-
+-    ipaddress = "2000:fe80:789::";
+-    EXPECT_FALSE(isLinkLocalIP(ipaddress));
+-
+-    ipaddress = "2000:fe80::";
+-    EXPECT_FALSE(isLinkLocalIP(ipaddress));
+-
+-    ipaddress = "169.254.3.3";
+-    EXPECT_TRUE(isLinkLocalIP(ipaddress));
+-
+-    ipaddress = "3.169.254.3";
+-    EXPECT_FALSE(isLinkLocalIP(ipaddress));
+-
+-    ipaddress = "3.3.169.254";
+-    EXPECT_FALSE(isLinkLocalIP(ipaddress));
+-}
+-
+-TEST_F(TestUtil, convertPrefixToMask)
+-{
+-    std::string mask = toMask(AF_INET, 24);
+-    EXPECT_EQ(mask, "255.255.255.0");
+-
+-    mask = toMask(AF_INET, 8);
+-    EXPECT_EQ(mask, "255.0.0.0");
+-
+-    mask = toMask(AF_INET, 27);
+-    EXPECT_EQ(mask, "255.255.255.224");
+-}
+-
+ TEST_F(TestUtil, InterfaceToUbootEthAddr)
+ {
+     EXPECT_EQ(std::nullopt, interfaceToUbootEthAddr("et"));
+diff --git a/types.hpp b/types.hpp
+index 3279256..641ac35 100644
+--- a/types.hpp
++++ b/types.hpp
+@@ -6,19 +6,14 @@
+ #include <netinet/in.h>
+ #include <systemd/sd-event.h>
+ 
+-#include <array>
+ #include <chrono>
+ #include <cstddef>
+ #include <functional>
+-#include <list>
+-#include <map>
+ #include <memory>
+ #include <sdeventplus/clock.hpp>
+ #include <sdeventplus/utility/timer.hpp>
+ #include <set>
+ #include <string>
+-#include <variant>
+-#include <vector>
+ 
+ namespace phosphor
+ {
+@@ -48,13 +43,6 @@ constexpr auto deviceFileSuffix = ".netdev";
+ 
+ using IntfName = std::string;
+ 
+-struct AddrInfo
+-{
+-    uint8_t addrType;
+-    std::string ipaddress;
+-    uint16_t prefix;
+-};
+-
+ using Addr_t = ifaddrs*;
+ 
+ struct AddrDeleter
+@@ -80,11 +68,6 @@ using EventPtr = std::unique_ptr<sd_event, EventDeleter>;
+ template <typename T>
+ using UniquePtr = std::unique_ptr<T, std::function<void(T*)>>;
+ 
+-// Byte representations for common address types in network byte order
+-using InAddrAny = std::variant<struct in_addr, struct in6_addr>;
+-
+-using AddrList = std::list<AddrInfo>;
+-using IntfAddrMap = std::map<IntfName, AddrList>;
+ using InterfaceList = std::set<IntfName>;
+ 
+ using Timer = sdeventplus::utility::Timer<sdeventplus::ClockId::Monotonic>;
+diff --git a/util.cpp b/util.cpp
+index cb9e720..2205267 100644
+--- a/util.cpp
++++ b/util.cpp
+@@ -28,128 +28,10 @@ namespace phosphor
+ namespace network
+ {
+ 
+-namespace
+-{
+-
+ using namespace phosphor::logging;
+ using namespace sdbusplus::xyz::openbmc_project::Common::Error;
+ namespace fs = std::filesystem;
+ 
+-uint8_t toV6Cidr(const std::string& subnetMask)
+-{
+-    uint8_t pos = 0;
+-    uint8_t prevPos = 0;
+-    uint8_t cidr = 0;
+-    uint16_t buff{};
+-    do
+-    {
+-        // subnet mask look like ffff:ffff::
+-        // or ffff:c000::
+-        pos = subnetMask.find(":", prevPos);
+-        if (pos == std::string::npos)
+-        {
+-            break;
+-        }
+-
+-        auto str = subnetMask.substr(prevPos, (pos - prevPos));
+-        prevPos = pos + 1;
+-
+-        // String length is 0
+-        if (!str.length())
+-        {
+-            return cidr;
+-        }
+-        // converts it into number.
+-        if (sscanf(str.c_str(), "%hx", &buff) <= 0)
+-        {
+-            log<level::ERR>("Invalid Mask",
+-                            entry("SUBNETMASK=%s", subnetMask.c_str()));
+-
+-            return 0;
+-        }
+-
+-        // convert the number into bitset
+-        // and check for how many ones are there.
+-        // if we don't have all the ones then make
+-        // sure that all the ones should be left justify.
+-
+-        if (__builtin_popcount(buff) != 16)
+-        {
+-            if (((sizeof(buff) * 8) - (__builtin_ctz(buff))) !=
+-                __builtin_popcount(buff))
+-            {
+-                log<level::ERR>("Invalid Mask",
+-                                entry("SUBNETMASK=%s", subnetMask.c_str()));
+-
+-                return 0;
+-            }
+-            cidr += __builtin_popcount(buff);
+-            return cidr;
+-        }
+-
+-        cidr += 16;
+-    } while (1);
+-
+-    return cidr;
+-}
+-} // anonymous namespace
+-
+-uint8_t toCidr(int addressFamily, const std::string& subnetMask)
+-{
+-    if (addressFamily == AF_INET6)
+-    {
+-        return toV6Cidr(subnetMask);
+-    }
+-
+-    uint32_t buff;
+-
+-    auto rc = inet_pton(addressFamily, subnetMask.c_str(), &buff);
+-    if (rc <= 0)
+-    {
+-        log<level::ERR>("inet_pton failed:",
+-                        entry("SUBNETMASK=%s", subnetMask.c_str()));
+-        return 0;
+-    }
+-
+-    buff = be32toh(buff);
+-    // total no of bits - total no of leading zero == total no of ones
+-    if (((sizeof(buff) * 8) - (__builtin_ctz(buff))) ==
+-        __builtin_popcount(buff))
+-    {
+-        return __builtin_popcount(buff);
+-    }
+-    else
+-    {
+-        log<level::ERR>("Invalid Mask",
+-                        entry("SUBNETMASK=%s", subnetMask.c_str()));
+-        return 0;
+-    }
+-}
+-
+-std::string toMask(int addressFamily, uint8_t prefix)
+-{
+-    if (addressFamily == AF_INET6)
+-    {
+-        // TODO:- conversion for v6
+-        return "";
+-    }
+-
+-    if (prefix < 1 || prefix > 30)
+-    {
+-        log<level::ERR>("Invalid Prefix", entry("PREFIX=%d", prefix));
+-        return "";
+-    }
+-    /* Create the netmask from the number of bits */
+-    unsigned long mask = 0;
+-    for (auto i = 0; i < prefix; i++)
+-    {
+-        mask |= 1 << (31 - i);
+-    }
+-    struct in_addr netmask;
+-    netmask.s_addr = htonl(mask);
+-    return inet_ntoa(netmask);
+-}
+-
+ InAddrAny addrFromBuf(int addressFamily, std::string_view buf)
+ {
+     if (addressFamily == AF_INET)
+@@ -205,11 +87,6 @@ std::string toString(const InAddrAny& addr)
+     return ip;
+ }
+ 
+-bool isLinkLocalIP(const std::string& address)
+-{
+-    return address.find(IPV4_PREFIX) == 0 || address.find(IPV6_PREFIX) == 0;
+-}
+-
+ bool isValidIP(int addressFamily, const std::string& address)
+ {
+     unsigned char buf[sizeof(struct in6_addr)];
+@@ -240,81 +117,6 @@ bool isValidPrefix(int addressFamily, uint8_t prefixLength)
+     return true;
+ }
+ 
+-IntfAddrMap getInterfaceAddrs()
+-{
+-    IntfAddrMap intfMap{};
+-    struct ifaddrs* ifaddr = nullptr;
+-
+-    // attempt to fill struct with ifaddrs
+-    if (getifaddrs(&ifaddr) == -1)
+-    {
+-        auto error = errno;
+-        log<level::ERR>("Error occurred during the getifaddrs call",
+-                        entry("ERRNO=%s", strerror(error)));
+-        elog<InternalFailure>();
+-    }
+-
+-    AddrPtr ifaddrPtr(ifaddr);
+-    ifaddr = nullptr;
+-
+-    std::string intfName{};
+-
+-    for (ifaddrs* ifa = ifaddrPtr.get(); ifa != nullptr; ifa = ifa->ifa_next)
+-    {
+-        // walk interfaces
+-        if (ifa->ifa_addr == nullptr)
+-        {
+-            continue;
+-        }
+-
+-        // get only INET interfaces not ipv6
+-        if (ifa->ifa_addr->sa_family == AF_INET ||
+-            ifa->ifa_addr->sa_family == AF_INET6)
+-        {
+-            // if loopback, or not running ignore
+-            if ((ifa->ifa_flags & IFF_LOOPBACK) ||
+-                !(ifa->ifa_flags & IFF_RUNNING))
+-            {
+-                continue;
+-            }
+-            intfName = ifa->ifa_name;
+-            AddrInfo info{};
+-            char ip[INET6_ADDRSTRLEN] = {0};
+-            char subnetMask[INET6_ADDRSTRLEN] = {0};
+-
+-            if (ifa->ifa_addr->sa_family == AF_INET)
+-            {
+-
+-                inet_ntop(ifa->ifa_addr->sa_family,
+-                          &(((struct sockaddr_in*)(ifa->ifa_addr))->sin_addr),
+-                          ip, sizeof(ip));
+-
+-                inet_ntop(
+-                    ifa->ifa_addr->sa_family,
+-                    &(((struct sockaddr_in*)(ifa->ifa_netmask))->sin_addr),
+-                    subnetMask, sizeof(subnetMask));
+-            }
+-            else
+-            {
+-                inet_ntop(ifa->ifa_addr->sa_family,
+-                          &(((struct sockaddr_in6*)(ifa->ifa_addr))->sin6_addr),
+-                          ip, sizeof(ip));
+-
+-                inet_ntop(
+-                    ifa->ifa_addr->sa_family,
+-                    &(((struct sockaddr_in6*)(ifa->ifa_netmask))->sin6_addr),
+-                    subnetMask, sizeof(subnetMask));
+-            }
+-
+-            info.addrType = ifa->ifa_addr->sa_family;
+-            info.ipaddress = ip;
+-            info.prefix = toCidr(info.addrType, std::string(subnetMask));
+-            intfMap[intfName].push_back(info);
+-        }
+-    }
+-    return intfMap;
+-}
+-
+ InterfaceList getInterfaces()
+ {
+     InterfaceList interfaces{};
+diff --git a/util.hpp b/util.hpp
+index 05c400b..c680ef7 100644
+--- a/util.hpp
++++ b/util.hpp
+@@ -26,8 +26,6 @@ using EthernetInterfaceIntf =
+ constexpr auto IPV4_MIN_PREFIX_LENGTH = 1;
+ constexpr auto IPV4_MAX_PREFIX_LENGTH = 32;
+ constexpr auto IPV6_MAX_PREFIX_LENGTH = 64;
+-constexpr auto IPV4_PREFIX = "169.254";
+-constexpr auto IPV6_PREFIX = "fe80";
+ 
+ namespace mac_address
+ {
+@@ -79,13 +77,6 @@ bool isUnicast(const ether_addr& mac);
+ constexpr auto networkdService = "systemd-networkd.service";
+ constexpr auto timeSynchdService = "systemd-timesyncd.service";
+ 
+-/* @brief converts the given subnet into prefix notation.
+- * @param[in] addressFamily - IP address family(AF_INET/AF_INET6).
+- * @param[in] mask - Subnet Mask.
+- * @returns prefix.
+- */
+-uint8_t toCidr(int addressFamily, const std::string& mask);
+-
+ /* @brief converts a sockaddr for the specified address family into
+  *        a type_safe InAddrAny.
+  * @param[in] addressFamily - The address family of the buf
+@@ -99,19 +90,6 @@ InAddrAny addrFromBuf(int addressFamily, std::string_view buf);
+  */
+ std::string toString(const InAddrAny& addr);
+ 
+-/* @brief converts the prefix into subnetmask.
+- * @param[in] addressFamily - IP address family(AF_INET/AF_INET6).
+- * @param[in] prefix - prefix length.
+- * @returns subnet mask.
+- */
+-std::string toMask(int addressFamily, uint8_t prefix);
+-
+-/* @brief checks that the given ip address is link local or not.
+- * @param[in] address - IP address.
+- * @returns true if it is linklocal otherwise false.
+- */
+-bool isLinkLocalIP(const std::string& address);
+-
+ /* @brief checks that the given ip address valid or not.
+  * @param[in] addressFamily - IP address family(AF_INET/AF_INET6).
+  * @param[in] address - IP address.
+@@ -126,12 +104,6 @@ bool isValidIP(int addressFamily, const std::string& address);
+  */
+ bool isValidPrefix(int addressFamily, uint8_t prefixLength);
+ 
+-/** @brief Gets the map of interface and the associated
+- *         address.
+- *  @returns map of interface and the address.
+- */
+-IntfAddrMap getInterfaceAddrs();
+-
+ /** @brief Get all the interfaces from the system.
+  *  @returns list of interface names.
+  */
+-- 
+2.28.0.rc0.142.g3c755180ce-goog
+

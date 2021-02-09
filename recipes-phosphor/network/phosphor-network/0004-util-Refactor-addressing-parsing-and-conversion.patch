@@ -1,0 +1,251 @@
+From 6338079c1f6c1b4bc073e4eb6f43fefd184eb9f0 Mon Sep 17 00:00:00 2001
+From: "William A. Kennington III" <wak@google.com>
+Date: Mon, 22 Apr 2019 04:07:54 -0700
+Subject: [PATCH 4/8] util: Refactor addressing parsing and conversion
+
+Change-Id: Ia14bd01b1cc56d33fa0d7e77b334313c1db5c842
+Signed-off-by: William A. Kennington III <wak@google.com>
+---
+ ethernet_interface.cpp |  2 +-
+ test/test_util.cpp     | 30 +++++++++++++--
+ util.cpp               | 85 ++++++++++++++++++++++--------------------
+ util.hpp               | 11 ++++--
+ 4 files changed, 78 insertions(+), 50 deletions(-)
+
+diff --git a/ethernet_interface.cpp b/ethernet_interface.cpp
+index 89d5590..44e4d2a 100644
+--- a/ethernet_interface.cpp
++++ b/ethernet_interface.cpp
+@@ -297,7 +297,7 @@ ObjectPath EthernetInterface::iP(IP::Protocol protType, std::string ipaddress,
+ ObjectPath EthernetInterface::neighbor(std::string iPAddress,
+                                        std::string mACAddress)
+ {
+-    if (!isValidIP(AF_INET, iPAddress) && !isValidIP(AF_INET6, iPAddress))
++    if (!isValidIP(iPAddress))
+     {
+         log<level::ERR>("Not a valid IP address",
+                         entry("ADDRESS=%s", iPAddress.c_str()));
+diff --git a/test/test_util.cpp b/test/test_util.cpp
+index e644675..1b671bb 100644
+--- a/test/test_util.cpp
++++ b/test/test_util.cpp
+@@ -41,8 +41,7 @@ TEST_F(TestUtil, AddrFromBuf)
+     InAddrAny res1 = addrFromBuf(AF_INET, buf1);
+     EXPECT_EQ(0, memcmp(&ip1, &std::get<struct in_addr>(res1), sizeof(ip1)));
+     EXPECT_THROW(addrFromBuf(AF_INET, tooSmall), std::runtime_error);
+-    EXPECT_THROW(addrFromBuf(AF_INET, tooLarge), std::runtime_error);
+-    EXPECT_THROW(addrFromBuf(AF_UNSPEC, buf1), std::runtime_error);
++    EXPECT_THROW(addrFromBuf(AF_UNSPEC, buf1), std::invalid_argument);
+ 
+     struct in6_addr ip2;
+     EXPECT_EQ(1, inet_pton(AF_INET6, "fdd8:b5ad:9d93:94ee::2:1", &ip2));
+@@ -50,8 +49,7 @@ TEST_F(TestUtil, AddrFromBuf)
+     InAddrAny res2 = addrFromBuf(AF_INET6, buf2);
+     EXPECT_EQ(0, memcmp(&ip2, &std::get<struct in6_addr>(res2), sizeof(ip2)));
+     EXPECT_THROW(addrFromBuf(AF_INET6, tooSmall), std::runtime_error);
+-    EXPECT_THROW(addrFromBuf(AF_INET6, tooLarge), std::runtime_error);
+-    EXPECT_THROW(addrFromBuf(AF_UNSPEC, buf2), std::runtime_error);
++    EXPECT_THROW(addrFromBuf(AF_UNSPEC, buf2), std::invalid_argument);
+ }
+ 
+ TEST_F(TestUtil, IpToString)
+@@ -63,6 +61,24 @@ TEST_F(TestUtil, IpToString)
+     struct in6_addr ip2;
+     EXPECT_EQ(1, inet_pton(AF_INET6, "fdd8:b5ad:9d93:94ee::2:1", &ip2));
+     EXPECT_EQ("fdd8:b5ad:9d93:94ee::2:1", toString(InAddrAny(ip2)));
++
++    InAddrAny ip3;
++    try
++    {
++        struct E
++        {
++            operator struct in6_addr()
++            {
++                throw 1;
++            }
++        };
++        ip3.emplace<struct in6_addr>(E());
++        EXPECT_TRUE(false);
++    }
++    catch (...)
++    {
++    }
++    EXPECT_THROW(toString(ip3), std::invalid_argument);
+ }
+ 
+ TEST_F(TestUtil, IpValidation)
+@@ -102,6 +118,12 @@ TEST_F(TestUtil, IpValidation)
+ 
+     ipaddress = "1::8";
+     EXPECT_EQ(true, isValidIP(AF_INET6, ipaddress));
++
++    EXPECT_THROW(isValidIP(AF_UNSPEC, "::"), std::invalid_argument);
++
++    EXPECT_TRUE(isValidIP("8.8.8.8"));
++    EXPECT_TRUE(isValidIP("fd00::2"));
++    EXPECT_FALSE(isValidIP("fx::2"));
+ }
+ 
+ TEST_F(TestUtil, PrefixValidation)
+diff --git a/util.cpp b/util.cpp
+index 180ca36..2d670e1 100644
+--- a/util.cpp
++++ b/util.cpp
+@@ -32,66 +32,69 @@ using namespace phosphor::logging;
+ using namespace sdbusplus::xyz::openbmc_project::Common::Error;
+ namespace fs = std::filesystem;
+ 
+-InAddrAny addrFromBuf(int addressFamily, std::string_view buf)
++InAddrAny addrFromBuf(int family, std::string_view buf)
+ {
+-    if (addressFamily == AF_INET)
++    if (family == AF_INET)
+     {
+-        struct in_addr ret;
+-        if (buf.size() != sizeof(ret))
+-        {
+-            throw std::runtime_error("Buf not in_addr sized");
+-        }
+-        memcpy(&ret, buf.data(), sizeof(ret));
+-        return ret;
++        return stdplus::raw::copyFrom<in_addr>(buf);
+     }
+-    else if (addressFamily == AF_INET6)
++    else if (family == AF_INET6)
+     {
+-        struct in6_addr ret;
+-        if (buf.size() != sizeof(ret))
+-        {
+-            throw std::runtime_error("Buf not in6_addr sized");
+-        }
+-        memcpy(&ret, buf.data(), sizeof(ret));
+-        return ret;
++        return stdplus::raw::copyFrom<in6_addr>(buf);
+     }
+ 
+-    throw std::runtime_error("Unsupported address family");
++    throw std::invalid_argument("Invalid addr family");
+ }
+ 
+-std::string toString(const InAddrAny& addr)
++template <int family>
++std::string toString(const typename FamilyTraits<family>::addr& addr)
+ {
+-    std::string ip;
+-    if (std::holds_alternative<struct in_addr>(addr))
++    char ret[FamilyTraits<family>::strlen];
++    if (inet_ntop(family, &addr, ret, sizeof(ret)) == NULL)
+     {
+-        const auto& v = std::get<struct in_addr>(addr);
+-        ip.resize(INET_ADDRSTRLEN);
+-        if (inet_ntop(AF_INET, &v, ip.data(), ip.size()) == NULL)
+-        {
+-            throw std::runtime_error("Failed to convert IP4 to string");
+-        }
++        throw std::runtime_error("Failed to convert IP to string");
+     }
+-    else if (std::holds_alternative<struct in6_addr>(addr))
++    return ret;
++}
++
++std::string toString(const InAddrAny& addr)
++{
++    if (std::holds_alternative<in_addr>(addr))
+     {
+-        const auto& v = std::get<struct in6_addr>(addr);
+-        ip.resize(INET6_ADDRSTRLEN);
+-        if (inet_ntop(AF_INET6, &v, ip.data(), ip.size()) == NULL)
+-        {
+-            throw std::runtime_error("Failed to convert IP6 to string");
+-        }
++        return toString<AF_INET>(std::get<in_addr>(addr));
+     }
+-    else
++    else if (std::holds_alternative<in6_addr>(addr))
+     {
+-        throw std::runtime_error("Invalid addr type");
++        return toString<AF_INET6>(std::get<in6_addr>(addr));
+     }
+-    ip.resize(strlen(ip.c_str()));
+-    return ip;
++
++    throw std::invalid_argument("Invalid addr family");
+ }
+ 
+-bool isValidIP(int addressFamily, const std::string& address)
++template <int family>
++bool isValidIP(const std::string& address)
+ {
+-    unsigned char buf[sizeof(struct in6_addr)];
++    typename FamilyTraits<family>::addr addr;
++    return inet_pton(family, address.c_str(), &addr) == 1;
++}
+ 
+-    return inet_pton(addressFamily, address.c_str(), buf) > 0;
++bool isValidIP(int family, const std::string& address)
++{
++    if (family == AF_INET)
++    {
++        return isValidIP<AF_INET>(address);
++    }
++    else if (family == AF_INET6)
++    {
++        return isValidIP<AF_INET6>(address);
++    }
++
++    throw std::invalid_argument("Invalid addr family");
++}
++
++bool isValidIP(const std::string& address)
++{
++    return isValidIP<AF_INET>(address) || isValidIP<AF_INET6>(address);
+ }
+ 
+ template <int family>
+diff --git a/util.hpp b/util.hpp
+index 40e198e..ae917f8 100644
+--- a/util.hpp
++++ b/util.hpp
+@@ -87,20 +87,22 @@ template <>
+ struct FamilyTraits<AF_INET>
+ {
+     using addr = in_addr;
++    static constexpr size_t strlen = INET_ADDRSTRLEN;
+ };
+ 
+ template <>
+ struct FamilyTraits<AF_INET6>
+ {
+     using addr = in6_addr;
++    static constexpr size_t strlen = INET6_ADDRSTRLEN;
+ };
+ 
+ /* @brief converts a sockaddr for the specified address family into
+  *        a type_safe InAddrAny.
+- * @param[in] addressFamily - The address family of the buf
++ * @param[in] family - The address family of the buf
+  * @param[in] buf - The network byte order address
+  */
+-InAddrAny addrFromBuf(int addressFamily, std::string_view buf);
++InAddrAny addrFromBuf(int family, std::string_view buf);
+ 
+ /* @brief converts the ip bytes into a string representation
+  * @param[in] addr - input ip address to convert.
+@@ -109,11 +111,12 @@ InAddrAny addrFromBuf(int addressFamily, std::string_view buf);
+ std::string toString(const InAddrAny& addr);
+ 
+ /* @brief checks that the given ip address valid or not.
+- * @param[in] addressFamily - IP address family(AF_INET/AF_INET6).
++ * @param[in] family - IP address family(AF_INET/AF_INET6).
+  * @param[in] address - IP address.
+  * @returns true if it is valid otherwise false.
+  */
+-bool isValidIP(int addressFamily, const std::string& address);
++bool isValidIP(int family, const std::string& address);
++bool isValidIP(const std::string& address);
+ 
+ /* @brief checks that the given prefix is valid or not.
+  * @param[in] family - IP address family(AF_INET/AF_INET6).
+-- 
+2.28.0.rc0.142.g3c755180ce-goog
+
