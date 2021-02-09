@@ -1,0 +1,113 @@
+From 7f9c6680ab9cbc215458dfacc89899f20a8ba50d Mon Sep 17 00:00:00 2001
+From: "William A. Kennington III" <wak@google.com>
+Date: Mon, 22 Apr 2019 01:13:28 -0700
+Subject: [PATCH 1/8] ethernet_interface: Remove local admin MAC check
+
+We don't want to restrict our users from using mac addresses outside of
+the local admin range. This is a policy that should be enforced outside
+of this daemon if needed.
+
+Change-Id: I4068843eef4b7553cc9575d6eaa6492c66cda49c
+Signed-off-by: William A. Kennington III <wak@google.com>
+---
+ ethernet_interface.cpp | 24 ------------------------
+ test/test_util.cpp     | 13 -------------
+ util.cpp               |  5 -----
+ util.hpp               |  6 ------
+ 4 files changed, 48 deletions(-)
+
+diff --git a/ethernet_interface.cpp b/ethernet_interface.cpp
+index 76d7f92..721cdf9 100644
+--- a/ethernet_interface.cpp
++++ b/ethernet_interface.cpp
+@@ -1010,30 +1010,6 @@ std::string EthernetInterface::mACAddress(std::string value)
+     ether_addr oldMAC = mac_address::fromString(MacAddressIntf::mACAddress());
+     if (!stdplus::raw::equal(newMAC, oldMAC))
+     {
+-        if (!mac_address::isLocalAdmin(newMAC))
+-        {
+-            try
+-            {
+-                auto inventoryMAC =
+-                    mac_address::getfromInventory(bus, interfaceName());
+-                if (!stdplus::raw::equal(newMAC, inventoryMAC))
+-                {
+-                    log<level::ERR>(
+-                        "Given MAC address is neither a local Admin "
+-                        "type nor is same as in inventory");
+-                    elog<InvalidArgument>(
+-                        Argument::ARGUMENT_NAME("MACAddress"),
+-                        Argument::ARGUMENT_VALUE(value.c_str()));
+-                }
+-            }
+-            catch (const std::exception& e)
+-            {
+-                log<level::ERR>("Exception occurred during getting of MAC "
+-                                "address from Inventory");
+-                elog<InternalFailure>();
+-            }
+-        }
+-
+         // Update everything that depends on the MAC value
+         for (const auto& [name, intf] : vlanInterfaces)
+         {
+diff --git a/test/test_util.cpp b/test/test_util.cpp
+index 83fcb83..a6605dd 100644
+--- a/test/test_util.cpp
++++ b/test/test_util.cpp
+@@ -283,19 +283,6 @@ TEST(MacIsUnicast, False)
+     EXPECT_FALSE(isUnicast(fromString("ff:ff:ff:ff:ff:ff")));
+ }
+ 
+-TEST(MacIsLocalAdmin, True)
+-{
+-    EXPECT_TRUE(isLocalAdmin(fromString("02:11:22:33:44:55")));
+-    EXPECT_TRUE(isLocalAdmin(fromString("FE:11:22:33:44:55")));
+-}
+-
+-TEST(MacIsLocalAdmin, False)
+-{
+-    EXPECT_FALSE(isLocalAdmin(fromString("00:00:00:00:00:00")));
+-    EXPECT_FALSE(isLocalAdmin(fromString("01:00:00:00:00:00")));
+-    EXPECT_FALSE(isLocalAdmin(fromString("fd:ff:ff:ff:ff:ff")));
+-}
+-
+ } // namespace mac_address
+ } // namespace network
+ } // namespace phosphor
+diff --git a/util.cpp b/util.cpp
+index f8a1e34..cb9e720 100644
+--- a/util.cpp
++++ b/util.cpp
+@@ -661,11 +661,6 @@ bool isUnicast(const ether_addr& mac)
+     return !isEmpty(mac) && !isMulticast(mac);
+ }
+ 
+-bool isLocalAdmin(const ether_addr& mac)
+-{
+-    return mac.ether_addr_octet[0] & 0b10;
+-}
+-
+ } // namespace mac_address
+ } // namespace network
+ } // namespace phosphor
+diff --git a/util.hpp b/util.hpp
+index 3a5e0bc..05c400b 100644
+--- a/util.hpp
++++ b/util.hpp
+@@ -74,12 +74,6 @@ bool isMulticast(const ether_addr& mac);
+  */
+ bool isUnicast(const ether_addr& mac);
+ 
+-/** @brief Determines if the mac address is locally managed
+- *  @param[in] mac - The mac address
+- *  @return True if local admin bit is set
+- */
+-bool isLocalAdmin(const ether_addr& mac);
+-
+ } // namespace mac_address
+ 
+ constexpr auto networkdService = "systemd-networkd.service";
+-- 
+2.28.0.rc0.142.g3c755180ce-goog
+
